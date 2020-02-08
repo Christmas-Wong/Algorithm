@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import math
 
-classification_name = "类别"
+classification_name = "classify"
 theta = 0  # 阈值
 
 
@@ -26,47 +26,47 @@ class TreeNode:
         self.false_node = false_node
 
 
+def empirical_entropy(data):
+    if len(data) == 0:
+        return 0
+    classification_types, classification_counts = \
+        np.unique(data[classification_name], return_counts=True)
+    probability = []
+    classification_total = len(data)
+    for item in classification_counts:
+        probability.append(item / classification_total)
+    entropy = 0.0
+    for index in range(len(probability)):
+        entropy -= probability[index] * math.log2(probability[index])
+    return entropy
+
+
 class DecisionTree(object):
 
     def __init__(self):
-        self._train_data = pd.read_csv("train.csv")
+        self._train_data = pd.read_csv("train_2.csv")
         self._test_data = pd.read_csv("test.csv")
-
-    @staticmethod
-    def _empirical_entropy(data):
-        if len(data) == 0:
-            return 0
-        classification_types, classification_counts = \
-            np.unique(data[classification_name], return_counts=True)
-        probability = []
-        classification_total = len(data)
-        for item in classification_counts:
-            probability.append(item / classification_total)
-        empirical_entropy = 0.0
-        for index in range(len(probability)):
-            empirical_entropy -= probability[index] * math.log2(probability[index])
-        return empirical_entropy
 
     def _information_gain_ratio(self, feature, input_data):
         feature_name, feature_counts = \
             np.unique(input_data[feature], return_counts=True)
-        information_gain = self._empirical_entropy(input_data)
+        information_gain = empirical_entropy(input_data)
         feature_total = len(input_data[feature])
         for index in range(len(feature_name)):
             data = input_data.ix[input_data[feature] == feature_name[index]]
             probability = feature_counts[index] / feature_total
-            information_gain -= probability * self._empirical_entropy(data)
+            information_gain -= probability * empirical_entropy(data)
         return information_gain
 
     def _best_feature(self, data):
-        empirical_entropy = self._empirical_entropy(data)
+        entropy = empirical_entropy(data)
         best_feature = ''
         best_gain = 0.0
         for item in data.columns:
             if item == classification_name:
                 continue
             if self._information_gain_ratio(item, data) > best_gain:
-                best_gain = self._information_gain_ratio(item, data) / empirical_entropy
+                best_gain = self._information_gain_ratio(item, data) / entropy
                 best_feature = item
         return best_feature, best_gain
 
@@ -109,7 +109,16 @@ class DecisionTree(object):
             result[r] += 1
         return result
 
-    def _build_tree(self, data):
+    def _gini_impurity(self, data):
+        total = len(data)
+        counts = self._unique_counts(data)
+        imp = 0
+        for k1 in counts.keys():
+            p1 = float(counts[k1]) / total
+            imp += p1 * (1 - p1)
+        return imp
+
+    def _build_tree(self, data, score_function=empirical_entropy):
 
         if len(data) == 0:
             return TreeNode()
@@ -119,7 +128,7 @@ class DecisionTree(object):
         if len(classification) == 1:
             result = {classification[0]: number[0]}
             return TreeNode(out_put=result)
-        #
+
         # 第二步：若数据没有特征，单节点树，最多的分类
         features = list(data.columns)
         features.remove(classification_name)
@@ -136,7 +145,7 @@ class DecisionTree(object):
             return TreeNode(out_put=result)
 
         # 获取最佳分割条件
-        entropy = self._empirical_entropy(data)
+        entropy = empirical_entropy(data)
         if entropy == 0:
             result = {classification[index]: number[index]}
             return TreeNode(out_put=result)
@@ -145,8 +154,8 @@ class DecisionTree(object):
         for item in feature_item:
             set1, set2 = self._divide_set(data, best_feature, item)
             probability1 = float(len(set1) / len(data))
-            entropy = entropy - probability1 * self._empirical_entropy(set1)
-            entropy = entropy - (1 - probability1) * self._empirical_entropy(set2)
+            entropy = entropy - probability1 * score_function(set1)
+            entropy = entropy - (1 - probability1) * score_function(set2)
             if entropy > best_entropy and len(set1) > 0 and len(set2) > 0:
                 best_entropy = entropy
                 best_criteria = (best_feature, item)
@@ -164,9 +173,30 @@ class DecisionTree(object):
         else:
             return TreeNode(out_put=self._unique_counts(data))
 
-    def main(self):
-        tree = self._build_tree(self._train_data)
-        self._print_tree(tree=tree)
+    def _pure_tree(self, tree, mini_gain):
+        tree.real_node
+        if tree.real_node.result is None:
+            self._pure_tree(tree.real_node, mini_gain)
+        if tree.false_node.result is None:
+            self._pure_tree(tree.false_node, mini_gain)
+        real_frame = pd.DataFrame(data=None, index=None, columns=[classification_name])
+        false_frame = pd.DataFrame(data=None, index=None, columns=[classification_name])
+        if tree.real_node.result is not None and tree.false_node.result is not None:
+            i = 0
+            j = 0
+            for k, v in tree.real_node.result.items():
+                real_frame[i] = v
+                i += 1
+            for k, v in tree.false_node.result.items():
+                false_frame[j] = v
+                j += 1
+        merge_frame = pd.merge(real_frame, false_frame, how='left', on=classification_name)
+        delta = empirical_entropy(merge_frame) - (empirical_entropy(real_frame)+empirical_entropy(false_frame))
+        if delta < mini_gain:
+            tree.real_node = None
+            tree.false_node = None
+            tree.result = self._unique_counts(merge_frame)
+        return tree
 
     def _print_tree(self, tree, indent=''):
         # 是否是叶节点
@@ -180,6 +210,11 @@ class DecisionTree(object):
             self._print_tree(tree.real_node, indent + " ")
             print(indent + "F->", )
             self._print_tree(tree.false_node, indent + " ")
+
+    def main(self):
+        tree = self._build_tree(self._train_data)
+        # tree = self._pure_tree(tree, 0.1)
+        self._print_tree(tree=tree)
 
 
 if __name__ == '__main__':
